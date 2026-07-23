@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">天枢</string>
+    <string name="accessibility_service_description">天枢 AI 助手需要无障碍服务来操控设备界面、获取 UI 树、执行点击/滑动等操作。</string>
+    <string name="notification_listener_description">天枢需要读取通知栏消息来提供消息摘要功能。</string>
+</resources>

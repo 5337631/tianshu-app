@@ -1,0 +1,1358 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import '../services/ai_service.dart';
+import '../services/trigger_service.dart';
+import '../services/background_thinking_service.dart';
+import '../services/consciousness_service.dart';
+import '../utils/method_channel_helper.dart';
+
+const Color deepSpaceBlue = Color(0xFF1A1A2E);
+const Color starGold = Color(0xFFFFD700);
+const Color glassWhite = Color(0x0AFFFFFF);
+const Color glassBorder = Color(0x15FFFFFF);
+const Color textPrimary = Color(0xFFFFFFFF);
+const Color textSecondary = Color(0x59FFFFFF);
+
+/// 提供商 API 端点配置
+class ProviderConfig {
+  final String name;
+  final String label;
+  final IconData icon;
+  final String baseUrl;
+  final String? modelsEndpoint;
+  final bool supportsCustomEndpoint;
+
+  const ProviderConfig({
+    required this.name,
+    required this.label,
+    required this.icon,
+    required this.baseUrl,
+    this.modelsEndpoint,
+    this.supportsCustomEndpoint = false,
+  });
+}
+
+const List<ProviderConfig> providers = [
+  ProviderConfig(
+    name: 'openai',
+    label: 'OpenAI',
+    icon: Icons.psychology,
+    baseUrl: 'https://api.openai.com/v1',
+    modelsEndpoint: 'https://api.openai.com/v1/models',
+  ),
+  ProviderConfig(
+    name: 'anthropic',
+    label: 'Anthropic',
+    icon: Icons.auto_awesome,
+    baseUrl: 'https://api.anthropic.com/v1',
+    modelsEndpoint: 'https://api.anthropic.com/v1/models',
+  ),
+  ProviderConfig(
+    name: 'gemini',
+    label: 'Gemini',
+    icon: Icons.flash_on,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    modelsEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
+  ),
+  ProviderConfig(
+    name: 'deepseek',
+    label: 'DeepSeek',
+    icon: Icons.explore,
+    baseUrl: 'https://api.deepseek.com/v1',
+    modelsEndpoint: 'https://api.deepseek.com/v1/models',
+    supportsCustomEndpoint: true,
+  ),
+  ProviderConfig(
+    name: 'openrouter',
+    label: 'OpenRouter',
+    icon: Icons.hub,
+    baseUrl: 'https://openrouter.ai/api/v1',
+    modelsEndpoint: 'https://openrouter.ai/api/v1/models',
+    supportsCustomEndpoint: true,
+  ),
+  ProviderConfig(
+    name: 'custom',
+    label: '自定义',
+    icon: Icons.settings_ethernet,
+    baseUrl: '',
+    supportsCustomEndpoint: true,
+  ),
+];
+
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  // ---- 核心配置 ----
+  final MethodChannelHelper _channel = MethodChannelHelper();
+  String _selectedProvider = 'openai';
+  String _selectedModel = 'gpt-4';
+  bool _hasApiKey = false;
+  String _apiKey = '';
+  String _customEndpoint = '';
+
+  // ---- 模型列表 ----
+  List<String> _modelList = [];
+  bool _isLoadingModels = false;
+
+  // ---- 后台思考 ----
+  bool _thinkingEnabled = true;
+  int _conversationCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final config = AiService.instance.getConfig();
+    setState(() {
+      _selectedProvider = config['provider'] ?? 'openai';
+      _selectedModel = config['model'] ?? 'gpt-4';
+      _hasApiKey = config['hasApiKey'] ?? false;
+      _apiKey = config['apiKey'] ?? '';
+      _customEndpoint = config['customEndpoint'] ?? '';
+    });
+    // 如果有 API Key，自动拉取模型列表
+    if (_hasApiKey && _apiKey.isNotEmpty) {
+      _fetchModelList();
+    }
+  }
+
+  /// ═══════════════════════════════════════
+  ///  模型列表自动拉取 — 核心功能
+  /// ═══════════════════════════════════════
+
+  /// 根据选中的提供商和 API Key 拉取可用模型列表
+  Future<void> _fetchModelList() async {
+    if (_apiKey.isEmpty) return;
+
+    setState(() => _isLoadingModels = true);
+
+    try {
+      final provider = providers.firstWhere(
+        (p) => p.name == _selectedProvider,
+        orElse: () => providers.first,
+      );
+
+      List<String> models = [];
+
+      switch (_selectedProvider) {
+        case 'openai':
+          models = await _fetchOpenAIModels();
+          break;
+        case 'anthropic':
+          models = await _fetchAnthropicModels();
+          break;
+        case 'gemini':
+          models = await _fetchGeminiModels();
+          break;
+        case 'deepseek':
+          models = await _fetchDeepSeekModels();
+          break;
+        case 'openrouter':
+          models = await _fetchOpenRouterModels();
+          break;
+        default:
+          models = [];
+      }
+
+      if (models.isNotEmpty) {
+        setState(() {
+          _modelList = models;
+          // 如果当前选中的模型不在列表中，选第一个
+          if (!models.contains(_selectedModel)) {
+            _selectedModel = models.first;
+          }
+        });
+      }
+    } catch (e) {
+      // 拉取失败不影响现有设置
+    } finally {
+      setState(() => _isLoadingModels = false);
+    }
+  }
+
+  Future<List<String>> _fetchOpenAIModels() async {
+    final response = await http.get(
+      Uri.parse('https://api.openai.com/v1/models'),
+      headers: {'Authorization': 'Bearer $_apiKey'},
+    ).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final models = (data['data'] as List)
+          .map((m) => m['id'] as String)
+          .where((id) => id.contains('gpt') || id.contains('o1') || id.contains('o3'))
+          .toList();
+      models.sort();
+      return models;
+    }
+    return [];
+  }
+
+  Future<List<String>> _fetchAnthropicModels() async {
+    final response = await http.get(
+      Uri.parse('https://api.anthropic.com/v1/models'),
+      headers: {
+        'x-api-key': _apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+    ).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return (data['data'] as List)
+          .map((m) => m['id'] as String)
+          .where((id) => id.contains('claude'))
+          .toList();
+    }
+    // 如果 API 不支持列表，返回常用模型
+    return ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307',
+            'claude-3-5-sonnet-20240620', 'claude-3-5-haiku-20241022'];
+  }
+
+  Future<List<String>> _fetchGeminiModels() async {
+    // Gemini 使用 API Key 作为查询参数
+    final response = await http.get(
+      Uri.parse('https://generativelanguage.googleapis.com/v1beta/models?key=$_apiKey'),
+    ).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return (data['models'] as List)
+          .map((m) => m['name'] as String)
+          .where((name) => name.contains('gemini'))
+          .map((name) => name.split('/').last)
+          .toList();
+    }
+    return ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash-exp'];
+  }
+
+  Future<List<String>> _fetchDeepSeekModels() async {
+    final response = await http.get(
+      Uri.parse(_customEndpoint.isNotEmpty
+          ? '$_customEndpoint/models'
+          : 'https://api.deepseek.com/v1/models'),
+      headers: {'Authorization': 'Bearer $_apiKey'},
+    ).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return (data['data'] as List?)?.map((m) => m['id'] as String).toList() ?? [];
+    }
+    return ['deepseek-chat', 'deepseek-reasoner'];
+  }
+
+  Future<List<String>> _fetchOpenRouterModels() async {
+    final response = await http.get(
+      Uri.parse('https://openrouter.ai/api/v1/models'),
+      headers: {'Authorization': 'Bearer $_apiKey'},
+    ).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return (data['data'] as List)
+          .map((m) => m['id'] as String)
+          .take(30)
+          .toList();
+    }
+    return [];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: deepSpaceBlue,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('设置', style: TextStyle(color: textPrimary)),
+      ),
+      body: ListView(
+        children: [
+          // ═══════════════════════ AI 模型配置 ═══════════════════════
+          _buildSectionHeader('AI 模型'),
+          _buildGlassCard(children: [
+            _buildSettingsItem(
+              icon: Icons.cloud,
+              title: 'AI 提供商',
+              subtitle: _getProviderLabel(_selectedProvider),
+              onTap: _showProviderSelector,
+            ),
+            const Divider(color: glassBorder, height: 1),
+            _buildSettingsItem(
+              icon: Icons.smart_toy,
+              title: '模型',
+              subtitle: _isLoadingModels ? '加载中...' : _selectedModel,
+              trailing: _isLoadingModels
+                  ? const SizedBox(
+                      width: 20, height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: starGold),
+                    )
+                  : null,
+              onTap: _modelList.isNotEmpty ? _showModelSelector : null,
+            ),
+            const Divider(color: glassBorder, height: 1),
+            _buildSettingsItem(
+              icon: _hasApiKey ? Icons.key : Icons.key_off,
+              title: 'API Key',
+              subtitle: _hasApiKey ? '已配置' : '未配置',
+              subtitleColor: _hasApiKey ? Colors.green : Colors.orange,
+              onTap: _showApiKeyDialog,
+            ),
+            if (_getProviderConfig(_selectedProvider)?.supportsCustomEndpoint == true) ...[
+              const Divider(color: glassBorder, height: 1),
+              _buildSettingsItem(
+                icon: Icons.link,
+                title: '自定义端点',
+                subtitle: _customEndpoint.isNotEmpty ? _customEndpoint : '使用默认',
+                onTap: _showCustomEndpointDialog,
+              ),
+            ],
+          ]),
+
+          const SizedBox(height: 16),
+
+          // ═══════════════════════ 后台思考 ═══════════════════════
+          _buildSectionHeader('后台思考'),
+          _buildGlassCard(children: [
+            _buildSwitchItem(
+              icon: Icons.psychology,
+              title: '内心独白',
+              subtitle: '空闲时自动生成观察、反思、洞察',
+              value: _thinkingEnabled,
+              onChanged: (v) => setState(() => _thinkingEnabled = v),
+            ),
+            const Divider(color: glassBorder, height: 1),
+            _buildSettingsItem(
+              icon: Icons.timeline,
+              title: '最近思考',
+              subtitle: '${BackgroundThinkingService.instance.innerMonologue.length} 条记录',
+              onTap: () => _showInnerMonologue(),
+            ),
+          ]),
+
+          const SizedBox(height: 16),
+
+          // ═══════════════════════ 意识与人格 ═══════════════════════
+          _buildSectionHeader('意识与人格'),
+          _buildGlassCard(children: [
+            _buildSettingsItem(
+              icon: Icons.face,
+              title: '人格画像',
+              subtitle: '7 维意识档案，了解你的数字人格',
+              onTap: () {},
+            ),
+            const Divider(color: glassBorder, height: 1),
+            _buildSettingsItem(
+              icon: Icons.auto_awesome,
+              title: '智能预判',
+              subtitle: '基于时间、场景、任务主动推荐',
+              onTap: () {},
+            ),
+          ]),
+
+          const SizedBox(height: 16),
+
+          // ═══════════════════════ 权限 ═══════════════════════
+          _buildSectionHeader('权限'),
+          _buildGlassCard(children: [
+            _buildPermissionTile('无障碍服务', '用于截屏、UI 操作', Icons.accessibility),
+            const Divider(color: glassBorder, height: 1),
+            _buildPermissionTile('通知监听', '用于读取通知栏消息', Icons.notifications),
+            const Divider(color: glassBorder, height: 1),
+            _buildPermissionTile('位置权限', '用于位置触发和天气', Icons.location_on),
+          ]),
+
+          const SizedBox(height: 16),
+
+          // ═══════════════════════ 自动化 ═══════════════════════
+          _buildSectionHeader('自动化'),
+          _buildGlassCard(children: [
+            _buildSettingsItem(
+              icon: Icons.timer,
+              title: '触发规则',
+              subtitle: '${TriggerService.instance.rules.length} 个规则',
+              onTap: _showTriggerRules,
+            ),
+          ]),
+
+          const SizedBox(height: 16),
+
+          // ═══════════════════════ 关于 ═══════════════════════
+          _buildSectionHeader('关于'),
+          _buildGlassCard(children: [
+            const _InfoItem(label: '版本', value: '1.0.0'),
+            const Divider(color: glassBorder, height: 1),
+            const _InfoItem(label: '提供商', value: '3 个'),
+            const Divider(color: glassBorder, height: 1),
+            _buildSettingsItem(
+              icon: Icons.code,
+              title: '开源协议',
+              subtitle: 'MIT License',
+              onTap: () {},
+            ),
+          ]),
+
+          const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════
+  //  UI 构建组件
+  // ═══════════════════════════════════════════
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 12, fontWeight: FontWeight.w600,
+          color: textSecondary, letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGlassCard({required List<Widget> children}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            decoration: BoxDecoration(
+              color: glassWhite,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: glassBorder),
+            ),
+            child: Column(children: children),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    Color? subtitleColor,
+    Widget? trailing,
+    VoidCallback? onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: starGold, size: 22),
+      title: Text(title, style: const TextStyle(color: textPrimary, fontSize: 14)),
+      subtitle: Text(
+        subtitle,
+        style: TextStyle(color: subtitleColor ?? textSecondary, fontSize: 12),
+        maxLines: 1, overflow: TextOverflow.ellipsis,
+      ),
+      trailing: trailing ?? (onTap != null
+          ? const Icon(Icons.chevron_right, color: textSecondary, size: 18)
+          : null),
+      onTap: onTap,
+      dense: true,
+    );
+  }
+
+  Widget _buildSwitchItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, color: starGold, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(color: textPrimary, fontSize: 14)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: const TextStyle(color: textSecondary, fontSize: 11)),
+              ],
+            ),
+          ),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeColor: starGold,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPermissionTile(String title, String subtitle, IconData icon) {
+    return ListTile(
+      leading: Icon(icon, color: starGold, size: 22),
+      title: Text(title, style: const TextStyle(color: textPrimary, fontSize: 14)),
+      subtitle: Text(subtitle, style: const TextStyle(color: textSecondary, fontSize: 12)),
+      trailing: const Icon(Icons.chevron_right, color: textSecondary, size: 18),
+      onTap: () async {
+        if (title == '无障碍服务') {
+          final enabled = await _channel.isAccessibilityEnabled();
+          if (!enabled && mounted) {
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: deepSpaceBlue,
+                title: const Text('启用无障碍服务', style: TextStyle(color: textPrimary)),
+                content: const Text(
+                  '需要启用无障碍服务才能使用截屏和 UI 操作功能',
+                  style: TextStyle(color: textSecondary),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('取消', color: textSecondary),
+                  ),
+                  TextButton(
+                    onPressed: () { _channel.openAccessibilitySettings(); Navigator.pop(ctx); },
+                    child: const Text('去设置', color: starGold),
+                  ),
+                ],
+              ),
+            );
+          }
+        }
+      },
+    );
+  }
+
+  // ═══════════════════════════════════════════
+  //  对话框
+  // ═══════════════════════════════════════════
+
+  /// 选择提供商
+  void _showProviderSelector() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: deepSpaceBlue,
+        title: const Text('选择提供商', style: TextStyle(color: textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: providers.map((p) {
+            final isSelected = p.name == _selectedProvider;
+            return RadioListTile<String>(
+              title: Row(
+                children: [
+                  Icon(p.icon, color: isSelected ? starGold : textSecondary, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    p.label,
+                    style: TextStyle(color: isSelected ? starGold : textPrimary),
+                  ),
+                ],
+              ),
+              subtitle: Text(p.baseUrl, style: const TextStyle(color: textSecondary, fontSize: 11)),
+              value: p.name,
+              groupValue: _selectedProvider,
+              activeColor: starGold,
+              onChanged: (value) async {
+                if (value != null) {
+                  setState(() {
+                    _selectedProvider = value;
+                    _modelList = [];
+                  });
+                  await AiService.instance.configure(
+                    provider: _getAiProvider(value),
+                    apiKey: _apiKey,
+                  );
+                  // 自动拉取模型列表
+                  if (_hasApiKey) _fetchModelList();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                }
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  /// 选择模型（从拉取的列表中选）
+  void _showModelSelector() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: deepSpaceBlue,
+        title: Row(
+          children: [
+            const Text('选择模型', style: TextStyle(color: textPrimary)),
+            const Spacer(),
+            if (_hasApiKey)
+              GestureDetector(
+                onTap: () { Navigator.pop(ctx); _fetchModelList(); },
+                child: const Icon(Icons.refresh, color: starGold, size: 20),
+              ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: _modelList.isEmpty
+              ? const Center(child: Text(
+                  '暂无模型列表\n请先配置 API Key',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: textSecondary),
+                ))
+              : ListView(
+                  children: _modelList.map((model) {
+                    final isSelected = model == _selectedModel;
+                    return RadioListTile<String>(
+                      title: Text(
+                        model,
+                        style: TextStyle(
+                          color: isSelected ? starGold : textPrimary,
+                          fontSize: 13,
+                        ),
+                      ),
+                      value: model,
+                      groupValue: _selectedModel,
+                      activeColor: starGold,
+                      onChanged: (value) async {
+                        if (value != null) {
+                          setState(() => _selectedModel = value);
+                          await AiService.instance.configure(
+                            provider: _getAiProvider(_selectedProvider),
+                            apiKey: _apiKey,
+                            model: value,
+                          );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// 配置 API Key
+  void _showApiKeyDialog() {
+    final controller = TextEditingController(text: _apiKey);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: deepSpaceBlue,
+        title: const Text('配置 API Key', style: TextStyle(color: textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${_getProviderLabel(_selectedProvider)} API Key',
+              style: const TextStyle(color: textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              style: const TextStyle(color: textPrimary),
+              decoration: InputDecoration(
+                hintText: 'sk-...',
+                hintStyle: const TextStyle(color: textSecondary),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: glassBorder),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: glassBorder),
+                ),
+              ),
+              obscureText: true,
+              maxLines: 1,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Key 仅存储在本地，不会上传',
+              style: TextStyle(fontSize: 12, color: textSecondary),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消', color: textSecondary),
+          ),
+          TextButton(
+            onPressed: () async {
+              final key = controller.text.trim();
+              if (key.isNotEmpty) {
+                setState(() {
+                  _apiKey = key;
+                  _hasApiKey = true;
+                });
+                await AiService.instance.configure(
+                  provider: _getAiProvider(_selectedProvider),
+                  apiKey: key,
+                  model: _selectedModel,
+                );
+                // 自动拉取模型列表
+                _fetchModelList();
+                if (ctx.mounted) Navigator.pop(ctx);
+              }
+            },
+            child: const Text('保存并获取模型', color: starGold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 自定义端点
+  void _showCustomEndpointDialog() {
+    final controller = TextEditingController(text: _customEndpoint);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: deepSpaceBlue,
+        title: const Text('自定义端点', style: TextStyle(color: textPrimary)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: textPrimary),
+          decoration: InputDecoration(
+            hintText: 'https://your-api.com/v1',
+            hintStyle: const TextStyle(color: textSecondary),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: glassBorder),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消', color: textSecondary),
+          ),
+          TextButton(
+            onPressed: () async {
+              setState(() => _customEndpoint = controller.text.trim());
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('保存', color: starGold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 内心独白详情
+  void _showInnerMonologue() {
+    final thoughts = BackgroundThinkingService.instance.innerMonologue;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: deepSpaceBlue,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (ctx, scrollController) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '内心独白',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textPrimary),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: textSecondary),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+            ),
+            if (thoughts.isEmpty)
+              const Expanded(
+                child: Center(
+                  child: Text(
+                    '暂无内心独白\n空闲时天枢会自动生成',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: textSecondary),
+                  ),
+                ),
+              )
+            else
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  itemCount: thoughts.length,
+                  itemBuilder: (ctx, i) {
+                    final t = thoughts[i];
+                    return ListTile(
+                      leading: Icon(
+                        Icons.psychology,
+                        color: starGold.withOpacity(1 - i * 0.05),
+                        size: 20,
+                      ),
+                      title: Text(
+                        t.content,
+                        style: const TextStyle(color: textPrimary, fontSize: 13),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${t.typeLabel} · ${_formatTimeAgo(t.timestamp)}',
+                        style: const TextStyle(color: textSecondary, fontSize: 11),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showTriggerRules() {
+    final rules = TriggerService.instance.rules;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: deepSpaceBlue,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (ctx, scrollController) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '触发规则',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textPrimary),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: textSecondary),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: scrollController,
+                itemCount: rules.length,
+                itemBuilder: (ctx, index) {
+                  final rule = rules[index];
+                  return SwitchListTile(
+                    title: Text(rule.name, style: const TextStyle(color: textPrimary)),
+                    subtitle: Text(
+                      '${rule.type} - ${rule.time ?? rule.locationName ?? ''}',
+                      style: const TextStyle(color: textSecondary),
+                    ),
+                    value: rule.enabled,
+                    activeColor: starGold,
+                    onChanged: (v) {
+                      TriggerService.instance.toggleRule(rule.id, v);
+                      setState(() {});
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTimeAgo(DateTime time) {
+    final diff = DateTime.now().difference(time);
+    if (diff.inMinutes < 1) return '刚刚';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}分钟前';
+    if (diff.inHours < 24) return '${diff.inHours}小时前';
+    return '${diff.inDays}天前';
+  }
+
+  String _getProviderLabel(String name) {
+    return providers.firstWhere((p) => p.name == name, orElse: () => providers.first).label;
+  }
+
+  ProviderConfig? _getProviderConfig(String name) {
+    try { return providers.firstWhere((p) => p.name == name); } catch (_) { return null; }
+  }
+
+  AiProvider _getAiProvider(String name) {
+    switch (name) {
+      case 'openai': return AiProvider.openai;
+      case 'anthropic': return AiProvider.anthropic;
+      case 'gemini': return AiProvider.gemini;
+      default: return AiProvider.openai;
+    }
+  }
+}
+
+class _InfoItem extends StatelessWidget {
+  final String label;
+  final String value;
+  const _InfoItem({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: textSecondary, fontSize: 14)),
+          Text(value, style: const TextStyle(color: textPrimary, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+}
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: deepSpaceBlue,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('设置', style: TextStyle(color: textPrimary)),
+      ),
+      body: ListView(
+        children: [
+          // AI 配置 - 核心
+          _buildSectionHeader('AI 模型'),
+          _buildGlassCard(
+            children: [
+              _buildProviderSelector(),
+              const Divider(color: glassBorder, height: 1),
+              _buildModelSelector(),
+              const Divider(color: glassBorder, height: 1),
+              _buildApiKeyField(),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // 权限设置
+          _buildSectionHeader('权限'),
+          _buildGlassCard(
+            children: [
+              _buildPermissionTile(
+                '无障碍服务',
+                '用于截屏、UI 操作',
+                Icons.accessibility,
+              ),
+              const Divider(color: glassBorder, height: 1),
+              _buildPermissionTile(
+                '通知监听',
+                '用于读取通知栏消息',
+                Icons.notifications,
+              ),
+              const Divider(color: glassBorder, height: 1),
+              _buildPermissionTile(
+                '位置权限',
+                '用于位置触发和天气',
+                Icons.location_on,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // 触发规则
+          _buildSectionHeader('自动化'),
+          _buildGlassCard(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.timer, color: starGold),
+                title: const Text('触发规则', style: TextStyle(color: textPrimary)),
+                subtitle: Text(
+                  '${TriggerService.instance.rules.length} 个规则',
+                  style: const TextStyle(color: textSecondary),
+                ),
+                trailing: const Icon(Icons.chevron_right, color: textSecondary),
+                onTap: _showTriggerRules,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // 关于
+          _buildSectionHeader('关于'),
+          _buildGlassCard(
+            children: [
+              const ListTile(
+                leading: Icon(Icons.info_outline, color: textSecondary),
+                title: Text('版本', style: TextStyle(color: textPrimary)),
+                subtitle: Text('1.0.0', style: TextStyle(color: textSecondary)),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: textSecondary,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGlassCard({required List<Widget> children}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            decoration: BoxDecoration(
+              color: glassWhite,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: glassBorder),
+            ),
+            child: Column(children: children),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProviderSelector() {
+    return ListTile(
+      leading: const Icon(Icons.cloud, color: starGold),
+      title: const Text('AI 提供商', style: TextStyle(color: textPrimary)),
+      subtitle: Text(
+        _selectedProvider.name.toUpperCase(),
+        style: const TextStyle(color: textSecondary),
+      ),
+      trailing: const Icon(Icons.chevron_right, color: textSecondary),
+      onTap: _showProviderSelector,
+    );
+  }
+
+  Widget _buildModelSelector() {
+    return ListTile(
+      leading: const Icon(Icons.smart_toy, color: starGold),
+      title: const Text('模型', style: TextStyle(color: textPrimary)),
+      subtitle: Text(
+        _selectedModel,
+        style: const TextStyle(color: textSecondary),
+      ),
+      trailing: const Icon(Icons.chevron_right, color: textSecondary),
+      onTap: _showModelSelector,
+    );
+  }
+
+  Widget _buildApiKeyField() {
+    return ListTile(
+      leading: Icon(
+        Icons.key,
+        color: _hasApiKey ? Colors.green : Colors.orange,
+      ),
+      title: const Text('API Key', style: TextStyle(color: textPrimary)),
+      subtitle: Text(
+        _hasApiKey ? '已配置' : '未配置',
+        style: TextStyle(color: _hasApiKey ? Colors.green : Colors.orange),
+      ),
+      trailing: const Icon(Icons.chevron_right, color: textSecondary),
+      onTap: _showApiKeyDialog,
+    );
+  }
+
+  Widget _buildPermissionTile(String title, String subtitle, IconData icon) {
+    return ListTile(
+      leading: Icon(icon, color: starGold),
+      title: Text(title, style: const TextStyle(color: textPrimary)),
+      subtitle: Text(subtitle, style: const TextStyle(color: textSecondary)),
+      trailing: const Icon(Icons.chevron_right, color: textSecondary),
+      onTap: () async {
+        if (title == '无障碍服务') {
+          final enabled = await _channel.isAccessibilityEnabled();
+          if (!enabled && mounted) {
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                backgroundColor: deepSpaceBlue,
+                title: const Text('启用无障碍服务', style: TextStyle(color: textPrimary)),
+                content: const Text(
+                  '需要启用无障碍服务才能使用截屏和 UI 操作功能',
+                  style: TextStyle(color: textSecondary),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消', color: textSecondary),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      _channel.openAccessibilitySettings();
+                      Navigator.pop(context);
+                    },
+                    child: const Text('去设置', color: starGold),
+                  ),
+                ],
+              ),
+            );
+          }
+        }
+      },
+    );
+  }
+
+  void _showProviderSelector() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: deepSpaceBlue,
+        title: const Text('选择提供商', style: TextStyle(color: textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: AiProvider.values.map((provider) {
+            final isSelected = provider == _selectedProvider;
+            return RadioListTile<AiProvider>(
+              title: Text(
+                provider.name.toUpperCase(),
+                style: TextStyle(
+                  color: isSelected ? starGold : textPrimary,
+                ),
+              ),
+              value: provider,
+              groupValue: _selectedProvider,
+              activeColor: starGold,
+              onChanged: (value) async {
+                if (value != null) {
+                  setState(() => _selectedProvider = value);
+                  await AiService.instance.configure(
+                    provider: value,
+                    apiKey: '',
+                  );
+                  Navigator.pop(context);
+                }
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  void _showModelSelector() {
+    final models = {
+      AiProvider.openai: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-preview'],
+      AiProvider.anthropic: ['claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'],
+      AiProvider.gemini: ['gemini-pro', 'gemini-1.5-pro'],
+    };
+
+    final availableModels = models[_selectedProvider] ?? [];
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: deepSpaceBlue,
+        title: const Text('选择模型', style: TextStyle(color: textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: availableModels.map((model) {
+            final isSelected = model == _selectedModel;
+            return RadioListTile<String>(
+              title: Text(
+                model,
+                style: TextStyle(
+                  color: isSelected ? starGold : textPrimary,
+                ),
+              ),
+              value: model,
+              groupValue: _selectedModel,
+              activeColor: starGold,
+              onChanged: (value) async {
+                if (value != null) {
+                  setState(() => _selectedModel = value);
+                  await AiService.instance.configure(
+                    provider: _selectedProvider,
+                    apiKey: '',
+                    model: value,
+                  );
+                  Navigator.pop(context);
+                }
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  void _showApiKeyDialog() {
+    final controller = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: deepSpaceBlue,
+        title: const Text('配置 API Key', style: TextStyle(color: textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '提供商: ${_selectedProvider.name.toUpperCase()}',
+              style: const TextStyle(color: textSecondary),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              style: const TextStyle(color: textPrimary),
+              decoration: InputDecoration(
+                hintText: '输入 API Key',
+                hintStyle: const TextStyle(color: textSecondary),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: glassBorder),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: glassBorder),
+                ),
+              ),
+              obscureText: true,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Key 仅存储在本地，不会上传',
+              style: TextStyle(fontSize: 12, color: textSecondary),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消', color: textSecondary),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (controller.text.isNotEmpty) {
+                await AiService.instance.configure(
+                  provider: _selectedProvider,
+                  apiKey: controller.text,
+                  model: _selectedModel,
+                );
+                await _loadSettings();
+                if (mounted) Navigator.pop(context);
+              }
+            },
+            child: const Text('保存', color: starGold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTriggerRules() {
+    final rules = TriggerService.instance.rules;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: deepSpaceBlue,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '触发规则',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: textPrimary,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: textSecondary),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: scrollController,
+                itemCount: rules.length,
+                itemBuilder: (context, index) {
+                  final rule = rules[index];
+                  return SwitchListTile(
+                    title: Text(
+                      rule.name,
+                      style: const TextStyle(color: textPrimary),
+                    ),
+                    subtitle: Text(
+                      '${rule.type} - ${rule.time ?? rule.locationName ?? ''}',
+                      style: const TextStyle(color: textSecondary),
+                    ),
+                    value: rule.enabled,
+                    activeColor: starGold,
+                    onChanged: (value) {
+                      TriggerService.instance.toggleRule(rule.id, value);
+                      setState(() {});
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
