@@ -206,7 +206,7 @@ class _ModelConfigScreenState extends State<ModelConfigScreen> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        decoration: BoxDecoration(color: _glass, borderRadius: BorderRadius.circular(16), border: BorderSide(color: isSelected ? _gold : _border)),
+        decoration: BoxDecoration(color: _glass, borderRadius: BorderRadius.circular(16), border: Border.all(color: _border)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
