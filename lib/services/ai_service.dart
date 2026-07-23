@@ -258,6 +258,9 @@ $memoryContext''';
       case AiProvider.anthropic:
         return await _callAnthropic(systemPrompt);
       case AiProvider.gemini:
+    case AiProvider.mimo:
+    case AiProvider.deepseek:
+    case AiProvider.openrouter:
         return await _callGemini(systemPrompt);
       case AiProvider.mimo:
       case AiProvider.deepseek:
@@ -1311,6 +1314,9 @@ $memoryContext''';
         case AiProvider.anthropic:
           return await _callAnthropicForDistill(prompt);
         case AiProvider.gemini:
+    case AiProvider.mimo:
+    case AiProvider.deepseek:
+    case AiProvider.openrouter:
           return await _callGeminiForDistill(prompt);
       }
     } catch (e) {

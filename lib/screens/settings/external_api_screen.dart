@@ -113,7 +113,7 @@ class _ExternalApiScreenState extends State<ExternalApiScreen> {
           _buildSection('操作', [
             _buildActionRow([
               _buildActionButton('测试连接', Icons.wifi_find, _testConnection, _isTesting),
-              _buildActionButton('保存配置', Icons.save, _saveConfig),
+              _buildActionButton('保存配置', Icons.save, _saveConfig, false),
             ]),
             if (_testResult.isNotEmpty) _buildTestResult(),
           ]),

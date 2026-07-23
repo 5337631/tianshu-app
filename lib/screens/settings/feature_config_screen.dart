@@ -140,7 +140,6 @@ class _FeatureConfigScreenState extends State<FeatureConfigScreen> {
 
   Widget _buildFeatureTile(String title, String subtitle, IconData icon, bool value, ValueChanged<bool> onChanged) {
     return SwitchListTile(
-      leading: Icon(icon, color: value ? _gold : _text2, size: 22),
       title: Text(title, style: TextStyle(color: value ? _text : _text2, fontSize: 14)),
       subtitle: Text(subtitle, style: const TextStyle(color: _text2, fontSize: 11)),
       value: value,
