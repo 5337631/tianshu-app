@@ -176,7 +176,7 @@ class _ModelConfigScreenState extends State<ModelConfigScreen> {
           _buildSection('模型参数', [
             _buildSliderTile('Temperature', _temperature, 0, 2, (v) => setState(() => _temperature = v)),
             _buildSliderTile('Top P', _topP, 0, 1, (v) => setState(() => _topP = v)),
-            _buildIntSliderTile('Max Tokens', _maxTokens, 256, 16384, (v) => setState(() => _maxTokens = v)),
+            _buildIntSliderTile('Max Tokens', _maxTokens, 256, 16384, (v) => setState(() => _maxTokens = v.round())),
             SwitchListTile(
               title: const Text('流式输出', style: TextStyle(color: _text, fontSize: 14)),
               value: _enableStreaming,

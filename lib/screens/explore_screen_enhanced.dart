@@ -495,7 +495,6 @@ class _ExploreScreenEnhancedState extends State<ExploreScreenEnhanced> {
     final category = parts.length >= 2 ? parts[0] : 'unknown';
     
     return GlassCard(
-      margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         leading: Container(
           width: 40, height: 40,

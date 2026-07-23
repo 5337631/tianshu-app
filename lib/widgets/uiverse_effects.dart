@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'dart:math';
 import 'package:flutter/material.dart';
 
@@ -114,7 +115,7 @@ class GlassCard extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
         child: Container(
           decoration: BoxDecoration(
             color: backgroundColor ?? const Color(0x12FFFFFF),
@@ -150,7 +151,7 @@ class LiquidGlassButton extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             padding: padding,
             decoration: BoxDecoration(
