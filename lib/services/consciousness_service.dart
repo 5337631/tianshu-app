@@ -665,8 +665,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #
     return result ?? '反思失败';
   }
 
-  Future<void> _saveReflection(String task, String outcome, Strinif (keywordScore >= 0.5) return keywordScore;
-    }
+  Future<void> _saveReflection(String task, String outcome, String content) async {
+    // TODO: 保存反思记录到记忆库
+  }
+
+  double _calculateSimilarity(String a, String b) {
+    // 1. 精确匹配
+    if (a == b) return 1.0;
 
     // 2. 包含关系检查（如 "内向" 和 "性格内向"）
     if (a.contains(b) || b.contains(a)) return 0.8;
